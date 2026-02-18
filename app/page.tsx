@@ -10,6 +10,7 @@ type Message = { role: 'user' | 'assistant'; content: string; showExamplePatient
 
 const FORM_DATA_REGEX = /\[FORM_DATA\]([\s\S]*?)\[\/FORM_DATA\]/
 const FIELD_REGEX = /\[FIELD:(\w+)\]/g
+const BASIC_PROFILE_MARKER = '[BASIC_PROFILE_COLLECTED]'
 
 /** Galeri intent varsa AI'nın gereksiz başlık/liste metnini temizle */
 function stripGalleryRedundantText(
@@ -170,7 +171,7 @@ function AppHeader({ lang, subtitle }: { lang?: Lang | null; subtitle?: string }
         <div className="flex items-center gap-4">
           <img src="/images/logo.webp" alt="ASMED" className="w-20 h-20 sm:w-28 sm:h-28 object-contain flex-shrink-0" />
           <div>
-            <h1 className="text-lg font-semibold tracking-tight text-white">ASMED AI</h1>
+            <h1 className="text-lg font-semibold tracking-tight text-white">Dr. Koray Erdoğan AI</h1>
             <p className="text-slate-400 text-sm mt-0.5 font-medium">
               {displaySubtitle}
             </p>
@@ -258,13 +259,49 @@ function isYouTubeChannelUrl(href: string): boolean {
 
 const YOUTUBE_RAW_URL_REGEX = /(^|[\s\n])((https?:\/\/)?(www\.)?(youtu\.be\/[a-zA-Z0-9_-]+|youtube\.com\/watch\?v=[a-zA-Z0-9_-]+))([\s\n.,;:)]|$)/gm
 const YOUTUBE_CHANNEL_RAW_REGEX = /(^|[\s\n])((https?:\/\/)?(www\.)?youtube\.com\/(user\/[a-zA-Z0-9_-]+|@[a-zA-Z0-9_-]+)[^\s)*,;:]*)([\s\n.,;:)]|$)/gm
+const GENERIC_HTTP_URL_REGEX = /(^|[\s\n])((https?:\/\/[^\s<>()\]]+))([\s\n]|$)/gm
+const GENERIC_WWW_URL_REGEX = /(^|[\s\n])((www\.[^\s<>()\]]+))([\s\n]|$)/gm
 function ensureYouTubeLinksAsMarkdown(text: string): string {
-  let out = text.replace(YOUTUBE_RAW_URL_REGEX, (_, before, url, _protocol, _www, after) => {
+  // Remove noisy standalone CTA lines and duplicated raw URLs before link conversion.
+  let out = text
+    .replace(/^\s*Aç\s*→\s*$/gim, '')
+    .replace(/(^|\n)(https?:\/\/[^\s]+)\s*\n+\2(?=\n|$)/gim, '$1$2')
+  
+  // Remove raw URLs that appear after markdown links (with optional "Aç →" text and punctuation)
+  // This handles cases like: [Aç →](url)\nurl. or [Aç →](url)\nurl
+  out = out.replace(/(\[[^\]]+\]\((https?:\/\/[^\s)]+)\))\s*(?:\n+\s*(?:Aç\s*→\s*)?\s*)?\2[.\s]*/gi, '$1')
+  
+  // Also remove URLs that appear right after markdown links on the same or next line
+  out = out.replace(/(\[[^\]]+\]\((https?:\/\/[^\s)]+)\))\s*\n+\s*\2(?:\s*\.)?(?=\s*\n|$)/gi, '$1')
+
+  // Protect already-valid markdown links from being re-processed.
+  const mdLinks: string[] = []
+  out = out.replace(/\[[^\]]+\]\((https?:\/\/[^)\s]+)\)/g, (m) => {
+    const key = `__MDLINK_${mdLinks.length}__`
+    mdLinks.push(m)
+    return key
+  })
+
+  out = out.replace(YOUTUBE_RAW_URL_REGEX, (_, before, url, _protocol, _www, after) => {
     return `${before}[Videoyu izle](${normalizeUrl(url)})${after}`
   })
   out = out.replace(YOUTUBE_CHANNEL_RAW_REGEX, (_, before, url, _protocol, _www, after) => {
     return `${before}[ASMED YouTube Kanalı](${normalizeUrl(url)})${after}`
   })
+  out = out.replace(GENERIC_HTTP_URL_REGEX, (_, before, url, after) => {
+    const normalized = normalizeUrl(url)
+    return `${before}[${normalized}](${normalized})${after}`
+  })
+  out = out.replace(GENERIC_WWW_URL_REGEX, (_, before, url, after) => {
+    const normalized = normalizeUrl(url)
+    return `${before}[${normalized}](${normalized})${after}`
+  })
+
+  out = out.replace(/__MDLINK_(\d+)__/g, (_, idx) => mdLinks[Number(idx)] ?? '')
+  
+  // Final cleanup: remove any remaining duplicate URLs that appear after markdown links
+  out = out.replace(/(\[[^\]]+\]\((https?:\/\/[^\s)]+)\))\s*(?:\n+\s*)?\2(?:\s*\.)?(?=\s*\n|$)/gi, '$1')
+  
   return out
 }
 
@@ -551,20 +588,23 @@ const PHOTO_STRINGS: Record<Lang, { photoTitle: string; photoInstruction: string
 
 const FAQ_QUESTIONS: Record<Lang, string[]> = {
   tr: [
-    'Saç ekimi nedir ve nasıl yapılır?',
-    'FUE yöntemi nedir? ASMED\'de nasıl uygulanıyor?',
-    'Konsültasyon süreci nasıl işler?',
-    'İşlem süreci nasıl ilerler, adımlar nelerdir?',
-    'Saç ekimi işlemi acıtıyor mu?',
-    'İşlem ortalama ne kadar sürer?',
-    'Long Hair FUE ile Normal FUE farkı nedir?',
-    'Manuel FUE neden tercih ediliyor?',
-    'Ameliyat öncesi ve sonrası nelere dikkat etmeliyim?',
-    'Sonuçlar ne zaman görülür, iyileşme süreci nasıl?',
-    'Greft saklama ve kalite nasıl sağlanıyor?',
+    'Saç ekimi için belli bir yaş sınırı var mıdır?',
+    'Belli bir yaştan sonra saç dökülmesi durur mu?',
+    'Saç ekimi nedir ve ASMED\'de nasıl yapılır?',
+    'Farklı saç ekim teknikleri sonucu etkiler mi? (FUT/FUE, motorlu/manuel)',
+    'İyi bir saç ekimi sonucu için Finasterid kullanmak şart mıdır?',
+    'İyi bir sonuç için tek operasyon yeterli olur mu?',
+    'Yeterli donör yoksa ne yapılabilir?',
+    'Kimlere Long-FUE saç ekimi yapılabilir?',
+    'Kadınlara saç ekimi yapılabilir mi?',
+    'Sadece tepe bölgesine ekim olur mu?',
+    'Saç ekimi, var olan saçlarıma zarar verir mi?',
+    'Operasyon sonrası kızarıklık/şişlik ne zaman geçer?',
+    'Saç ekiminin sonucu tam olarak ne zaman görülür?',
+    'Saç ekimiyle eski saç çizgisine kavuşmak mümkün müdür?',
+    'Kaş, sakal ve bıyık ekimi yapılabilir mi?',
     'Klinik ve tesisler hakkında bilgi alabilir miyim?',
-    'KE-Rest, KE-Bot, K.E.E.P. nedir?',
-    'Coverage Value ve Graft Calculator nedir?',
+    'KE-Rest, KE-Bot, K.E.E.P., Coverage Value ve Graft Calculator nedir?',
     'YouTube\'da hasta röportajları ve önce-sonra videoları var mı?',
     '1950 greft FUE örnek hasta süreci – önce/sonra görselleri gösterir misiniz?',
     'Sonuç galerisi – 13 ay, 1 yıl, 14 ay örnekleri',
@@ -650,19 +690,19 @@ const FAQ_QUESTIONS: Record<Lang, string[]> = {
 const SUGGESTION_TOPICS: Record<Lang, { label: string; question: string }[]> = {
   tr: [
     { label: 'Hakkımızda', question: 'ASMED ve Dr. Koray Erdoğan hakkında bilgi verir misiniz?' },
-    { label: 'Saç ekimi nedir?', question: 'Saç ekimi nedir ve süreç nasıl ilerler?' },
-    { label: 'FUE nedir?', question: 'FUE yöntemi nedir? ASMED\'de nasıl uygulanıyor?' },
     { label: 'Konsültasyon', question: 'Konsültasyon süreci nasıl işler, ilk adım ne?' },
-    { label: 'İşlem süreci', question: 'Saç ekimi işlemi adım adım nasıl ilerliyor?' },
-    { label: 'Tarihçe', question: 'Saç ekimi ve FUE tarihçesi hakkında bilgi var mı?' },
+    { label: 'Saç ekimi nedir?', question: 'Saç ekimi nedir ve ASMED\'de süreç nasıl ilerler?' },
+    { label: 'FUT vs FUE', question: 'Farklı saç ekim teknikleri sonucu etkiler mi? FUT ve FUE farkı nedir?' },
+    { label: 'Manuel FUE farkı', question: 'Motorlu FUE ve Manuel FUE arasındaki fark nedir, neden manuel FUE tercih ediliyor?' },
+    { label: 'Long-FUE kimlere uygun?', question: 'Kimlere Long-FUE saç ekimi yapılabilir ve dezavantajları nelerdir?' },
+    { label: 'Tek seans yeterli mi?', question: 'İyi bir saç ekimi sonucu için bir operasyon yeterli olur mu?' },
+    { label: 'Donör yetersizse', question: 'Yeterli donör yoksa ne yapılabilir?' },
+    { label: 'Kadınlarda saç ekimi', question: 'Kadınlara saç ekimi yapılabilir mi?' },
+    { label: 'İyileşme ve sonuç', question: 'Operasyon sonrası iyileşme süreci nasıl ilerler, sonuç ne zaman tam görülür?' },
     { label: 'Klinik', question: 'Klinik ve tesisler hakkında bilgi ve görseller paylaşır mısınız?' },
     { label: 'Sonuçlar', question: 'Önce-sonra sonuç örnekleri ve ilgili videoları paylaşır mısınız?' },
-    { label: 'Long Hair FUE', question: 'Long Hair FUE ile Normal FUE farkı ve avantajları nelerdir?' },
-    { label: 'Manuel FUE', question: 'Manuel FUE neden tercih ediliyor, avantajları neler?' },
-    { label: 'Ameliyat öncesi/sonrası', question: 'Ameliyat öncesi ve sonrası nelere dikkat etmeliyim?' },
-    { label: 'İyileşme süreci', question: 'Sonuçlar ne zaman görülür, iyileşme süreci nasıl ilerler?' },
-    { label: 'KE-Rest / KE-Bot / K.E.E.P.', question: 'KE-Rest, KE-Bot ve K.E.E.P. nedir, ne işe yarar?' },
-    { label: 'YouTube', question: 'ASMED YouTube kanalında hasta röportajları ve videolar var mı?' },
+    { label: 'KE teknolojileri', question: 'KE-Rest, KE-Bot, K.E.E.P., Coverage Value ve Graft Calculator nedir?' },
+    { label: 'YouTube', question: 'ASMED YouTube kanalında hasta röportajları ve önce-sonra videoları var mı?' },
     { label: 'Örnek süreç görselleri', question: '1950 greft FUE örnek hasta sürecini (öncesi, operasyon, 20 ay, 27 ay) gösterebilir misiniz?' },
     { label: 'Sonuç galerisi', question: 'Sonuç galerisini aç – 13 ay, 1 yıl, 14 ay örnekleri gösterebilir misiniz?' },
     { label: 'Sık sorulan sorular', question: 'Sık sorulan sorulardan birkaçını yanıtlar mısınız?' },
@@ -760,6 +800,7 @@ export default function Home() {
   const [streamingContent, setStreamingContent] = useState<string | null>(null)
   const [streamingGallery, setStreamingGallery] = useState(false)
   const [advocacyDismissed, setAdvocacyDismissed] = useState(false)
+  const [basicProfileCollected, setBasicProfileCollected] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -785,6 +826,7 @@ export default function Home() {
 
   function startChat(lang: Lang) {
     setLanguage(lang)
+    setBasicProfileCollected(false)
     setMessages([{ role: 'assistant', content: WELCOME[lang] }])
   }
 
@@ -804,7 +846,7 @@ export default function Home() {
       /6.*(Kuru|Dry|Islak|Wet|kuru|ıslak)/i.test(lastAssistant.content) &&
       /yükleyebilirsiniz|yükleyin|upload|fotoğraf/i.test(lastAssistant.content)
 
-    const useStream = submitted || !!formData
+    const useStream = submitted || !!formData || basicProfileCollected
     const payload = {
       language,
       messages: [...messages, { role: 'user', content: text }].map((m) => ({ role: m.role, content: m.content })),
@@ -812,12 +854,13 @@ export default function Home() {
       photoUploadRequested: !formData && !!lastAskedForPhotos,
       consultationComplete: submitted,
       formDataPresent: !!formData,
+      basicProfileCollected,
       stream: useStream,
     }
 
     try {
       if (useStream) {
-        setStreamingContent('')
+        setStreamingContent(null)
         setStreamingGallery(false)
         const res = await fetch('/api/chat', {
           method: 'POST',
@@ -835,6 +878,7 @@ export default function Home() {
         let fullContent = ''
         let showGallery = false
         let showResGallery = false
+        let basicDone = basicProfileCollected
         if (reader) {
           while (true) {
             const { value, done } = await reader.read()
@@ -853,6 +897,7 @@ export default function Home() {
                 if (obj.d) {
                   showGallery = !!obj.g
                   showResGallery = !!obj.r
+                  basicDone = !!obj.b
                   break
                 }
                 if (obj.e) throw new Error(obj.e)
@@ -865,9 +910,16 @@ export default function Home() {
         }
         const fd = extractFormDataFromText(fullContent)
         if (fd) setFormData(fd)
+        if (basicDone) setBasicProfileCollected(true)
         const suggested = fullContent.match(/\[FIELD:(\w+)\]/)?.[1]
         if (suggested) setSuggestedNextField(suggested)
-        let clean = fullContent.replace(/\[FORM_DATA\][\s\S]*?\[\/FORM_DATA\]/g, '').replace(/\[FIELD:\w+\]/g, '').replace(/\[EXAMPLE_PATIENT_GALLERY\]/g, '').replace(/\[RESULTS_GALLERY\]/g, '').trim()
+        let clean = fullContent
+          .replace(/\[FORM_DATA\][\s\S]*?\[\/FORM_DATA\]/g, '')
+          .replace(/\[FIELD:\w+\]/g, '')
+          .replace(/\[EXAMPLE_PATIENT_GALLERY\]/g, '')
+          .replace(/\[RESULTS_GALLERY\]/g, '')
+          .replace(BASIC_PROFILE_MARKER, '')
+          .trim()
         clean = stripGalleryRedundantText(clean, { resultsGallery: showResGallery, examplePatientGallery: showGallery })
         setMessages((prev) => [...prev, { role: 'assistant', content: clean, showExamplePatientGallery: showGallery, showResultsGallery: showResGallery }])
         setStreamingContent(null)
@@ -887,6 +939,7 @@ export default function Home() {
         setMessages((prev) => [...prev, { role: 'assistant', content: data.message, showExamplePatientGallery: !!data.showExamplePatientGallery, showResultsGallery: !!data.showResultsGallery }])
         if (data.formData) setFormData(data.formData)
         if (data.suggestedNextField) setSuggestedNextField(data.suggestedNextField)
+        if (data.basicProfileCollected) setBasicProfileCollected(true)
       }
     } catch (err) {
       setStreamingContent(null)
@@ -912,18 +965,19 @@ export default function Home() {
     setMessages((prev) => [...prev, { role: 'user', content }])
     setLoading(true)
     setSuggestedNextField(null)
-    const useStream = submitted || !!formData
+    const useStream = submitted || !!formData || basicProfileCollected
     const payload = {
       language,
       messages: [...messages, { role: 'user', content }].map((m) => ({ role: m.role, content: m.content })),
       collectedData: Object.keys(dataToSend).length > 0 ? dataToSend : undefined,
       consultationComplete: submitted,
       formDataPresent: !!formData,
+      basicProfileCollected,
       stream: useStream,
     }
     try {
       if (useStream) {
-        setStreamingContent('')
+        setStreamingContent(null)
         setStreamingGallery(false)
         const res = await fetch('/api/chat', {
           method: 'POST',
@@ -941,6 +995,7 @@ export default function Home() {
         let fullContent = ''
         let showGallery = false
         let showResGallery = false
+        let basicDone = basicProfileCollected
         if (reader) {
           while (true) {
             const { value, done } = await reader.read()
@@ -959,6 +1014,7 @@ export default function Home() {
                 if (obj.d) {
                   showGallery = !!obj.g
                   showResGallery = !!obj.r
+                  basicDone = !!obj.b
                   break
                 }
                 if (obj.e) throw new Error(obj.e)
@@ -969,7 +1025,14 @@ export default function Home() {
             }
           }
         }
-        let clean = fullContent.replace(/\[FORM_DATA\][\s\S]*?\[\/FORM_DATA\]/g, '').replace(/\[FIELD:\w+\]/g, '').replace(/\[EXAMPLE_PATIENT_GALLERY\]/g, '').replace(/\[RESULTS_GALLERY\]/g, '').trim()
+        if (basicDone) setBasicProfileCollected(true)
+        let clean = fullContent
+          .replace(/\[FORM_DATA\][\s\S]*?\[\/FORM_DATA\]/g, '')
+          .replace(/\[FIELD:\w+\]/g, '')
+          .replace(/\[EXAMPLE_PATIENT_GALLERY\]/g, '')
+          .replace(/\[RESULTS_GALLERY\]/g, '')
+          .replace(BASIC_PROFILE_MARKER, '')
+          .trim()
         clean = stripGalleryRedundantText(clean, { resultsGallery: showResGallery, examplePatientGallery: showGallery })
         setMessages((prev) => [...prev, { role: 'assistant', content: clean, showExamplePatientGallery: showGallery, showResultsGallery: showResGallery }])
         setStreamingContent(null)
@@ -988,6 +1051,7 @@ export default function Home() {
         setMessages((prev) => [...prev, { role: 'assistant', content: data.message, showExamplePatientGallery: !!data.showExamplePatientGallery, showResultsGallery: !!data.showResultsGallery }])
         if (data.formData) setFormData(data.formData)
         if (data.suggestedNextField) setSuggestedNextField(data.suggestedNextField)
+        if (data.basicProfileCollected) setBasicProfileCollected(true)
       }
     } catch (err) {
       setStreamingContent(null)
@@ -1216,9 +1280,9 @@ export default function Home() {
             </div>
           )}
 
-          {formData && (
+          {(basicProfileCollected || formData) && (
             <>
-              {!submitted && (
+              {!submitted && formData && (
               <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-4 ai-card-glow">
                 <h3 className="text-base font-semibold text-slate-800">
                   {(PHOTO_STRINGS[language] ?? PHOTO_STRINGS.en).photoTitle}
